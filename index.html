@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Script Memorizor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <h1>Script Memorizor</h1>
+      <p>Write it. Hide it. Memorize it.</p>
+    </header>
+
+    <main>
+      <section id="menuView" class="view active" aria-label="Main menu">
+        <div class="panel create-panel">
+          <h2>Create a New Script</h2>
+          <label for="newTitle">Script title</label>
+          <input id="newTitle" type="text" maxlength="120" placeholder="Ex: Sales Intro" />
+
+          <label for="newScript">Full script text</label>
+          <textarea id="newScript" rows="8" placeholder="Type your full script here..."></textarea>
+
+          <button id="createBtn" class="btn btn-primary">Save and Start</button>
+          <p class="hint">A save file is created immediately and stored in your browser.</p>
+        </div>
+
+        <div class="panel saves-panel">
+          <div class="panel-row">
+            <h2>Your Saves</h2>
+            <button id="exportAllBtn" class="btn btn-ghost">Export All JSON</button>
+          </div>
+
+          <div class="panel-row import-row">
+            <input id="importFile" type="file" accept="application/json" />
+            <button id="importBtn" class="btn btn-ghost">Import JSON</button>
+          </div>
+
+          <ul id="saveList" class="save-list" aria-live="polite"></ul>
+        </div>
+      </section>
+
+      <section id="practiceView" class="view" aria-label="Memorization workspace">
+        <div class="panel workspace-panel">
+          <div class="workspace-header">
+            <div>
+              <h2 id="activeTitle">Untitled</h2>
+              <p id="progressLabel">0 / 0 words hidden</p>
+            </div>
+            <div class="workspace-actions">
+              <button id="backToMenuBtn" class="btn btn-ghost">Main Menu</button>
+            </div>
+          </div>
+
+          <div id="scriptDisplay" class="script-display"></div>
+
+          <div class="controls">
+            <button id="prevBtn" class="btn btn-ghost">Show Previous Word</button>
+            <button id="nextBtn" class="btn btn-primary">Hide Next Word</button>
+            <button id="resetBtn" class="btn btn-ghost">Reset Progress</button>
+            <button id="saveNowBtn" class="btn btn-ghost">Save Now</button>
+            <button id="exportCurrentBtn" class="btn btn-ghost">Export Current Save</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <template id="saveItemTemplate">
+    <li class="save-item">
+      <div class="save-meta">
+        <strong class="save-title"></strong>
+        <p class="save-info"></p>
+      </div>
+      <div class="save-actions">
+        <button class="btn btn-ghost load-btn">Load</button>
+        <button class="btn btn-ghost export-btn">Export</button>
+        <button class="btn btn-danger delete-btn">Delete</button>
+      </div>
+    </li>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
