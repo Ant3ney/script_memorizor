@@ -43,6 +43,25 @@
 
           <ul id="saveList" class="save-list" aria-live="polite"></ul>
         </div>
+
+        <div class="panel database-panel">
+          <div class="panel-row">
+            <h2>Sanity Database</h2>
+            <button id="pullSanityBtn" class="btn btn-ghost">Pull Saves</button>
+          </div>
+
+          <label for="sanityToken">Write token</label>
+          <div class="token-row">
+            <input id="sanityToken" type="password" autocomplete="off" placeholder="Paste token for uploads" />
+            <button id="saveTokenBtn" class="btn btn-primary">Use Token</button>
+            <button id="clearTokenBtn" class="btn btn-ghost">Clear</button>
+          </div>
+
+          <div class="panel-row database-actions">
+            <button id="pushSanityBtn" class="btn btn-ghost">Push All Saves</button>
+            <p id="sanityStatus" class="status" aria-live="polite">Sanity: local mode</p>
+          </div>
+        </div>
       </section>
 
       <section id="practiceView" class="view" aria-label="Memorization workspace">

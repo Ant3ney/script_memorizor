@@ -60,8 +60,12 @@ body {
 
 #menuView {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(2, minmax(320px, 1fr));
   gap: 1rem;
+}
+
+.database-panel {
+  grid-column: 1 / -1;
 }
 
 label {
@@ -106,6 +110,23 @@ textarea {
 
 .import-row {
   margin-bottom: 0.8rem;
+}
+
+.token-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.database-actions {
+  margin-top: 0.8rem;
+}
+
+.status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
 .btn {
@@ -261,6 +282,14 @@ textarea {
 }
 
 @media (max-width: 720px) {
+  #menuView {
+    grid-template-columns: 1fr;
+  }
+
+  .token-row {
+    grid-template-columns: 1fr;
+  }
+
   .save-item {
     grid-template-columns: 1fr;
   }

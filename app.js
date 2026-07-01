@@ -1,4 +1,10 @@
 const STORAGE_KEY = "script_memorizor_saves_v1";
+const SANITY_TOKEN_KEY = "script_memorizor_sanity_token_v1";
+const SANITY_CONFIG = {
+  projectId: "p60eirei",
+  dataset: "production",
+  apiVersion: "2025-05-14",
+};
 
 const state = {
   saves: [],
@@ -25,6 +31,12 @@ const refs = {
   resetBtn: document.getElementById("resetBtn"),
   saveNowBtn: document.getElementById("saveNowBtn"),
   exportCurrentBtn: document.getElementById("exportCurrentBtn"),
+  sanityToken: document.getElementById("sanityToken"),
+  saveTokenBtn: document.getElementById("saveTokenBtn"),
+  clearTokenBtn: document.getElementById("clearTokenBtn"),
+  pullSanityBtn: document.getElementById("pullSanityBtn"),
+  pushSanityBtn: document.getElementById("pushSanityBtn"),
+  sanityStatus: document.getElementById("sanityStatus"),
 };
 
 init();
@@ -32,7 +44,9 @@ init();
 function init() {
   state.saves = loadSaves();
   bindEvents();
+  renderSanityTokenState();
   renderSaveList();
+  pullSavesFromSanity({ silent: true });
 }
 
 function bindEvents() {
@@ -43,8 +57,12 @@ function bindEvents() {
   refs.prevBtn.addEventListener("click", revealPreviousWord);
   refs.nextBtn.addEventListener("click", hideNextWord);
   refs.resetBtn.addEventListener("click", resetProgress);
-  refs.saveNowBtn.addEventListener("click", persistSaves);
+  refs.saveNowBtn.addEventListener("click", handleSaveNow);
   refs.exportCurrentBtn.addEventListener("click", exportCurrentSave);
+  refs.saveTokenBtn.addEventListener("click", handleSaveSanityToken);
+  refs.clearTokenBtn.addEventListener("click", clearSanityToken);
+  refs.pullSanityBtn.addEventListener("click", () => pullSavesFromSanity());
+  refs.pushSanityBtn.addEventListener("click", () => syncSavesToSanity(state.saves));
 }
 
 function handleCreateSave() {
@@ -61,6 +79,7 @@ function handleCreateSave() {
   state.activeSaveId = save.id;
 
   persistSaves();
+  syncSaveToSanity(save, { silent: true });
   renderSaveList();
   renderPractice();
   showView("practice");
@@ -189,6 +208,7 @@ function hideNextWord() {
   save.hiddenCount += 1;
   touchSave(save);
   persistSaves();
+  syncSaveToSanity(save, { silent: true });
   renderPractice();
   renderSaveList();
 }
@@ -200,6 +220,7 @@ function revealPreviousWord() {
   save.hiddenCount -= 1;
   touchSave(save);
   persistSaves();
+  syncSaveToSanity(save, { silent: true });
   renderPractice();
   renderSaveList();
 }
@@ -215,6 +236,7 @@ function resetProgress() {
   save.hideOrder = shuffle(save.hideOrder.slice());
   touchSave(save);
   persistSaves();
+  syncSaveToSanity(save, { silent: true });
   renderPractice();
   renderSaveList();
 }
@@ -232,7 +254,17 @@ function deleteSave(id) {
   }
 
   persistSaves();
+  deleteSaveFromSanity(save, { silent: true });
   renderSaveList();
+}
+
+function handleSaveNow() {
+  const save = getActiveSave();
+  persistSaves();
+
+  if (!save) return;
+
+  syncSaveToSanity(save);
 }
 
 function exportCurrentSave() {
@@ -273,7 +305,9 @@ function handleImportFromFile() {
   }
 
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
+    const importedSaves = [];
+
     try {
       const raw = JSON.parse(String(reader.result || "{}"));
       const imported = parseImportedPayload(raw);
@@ -294,15 +328,28 @@ function handleImportFromFile() {
         }
 
         state.saves.unshift(fixed);
+        importedSaves.push(fixed);
       }
 
       persistSaves();
       renderSaveList();
       refs.importFile.value = "";
-      alert(`Imported ${imported.length} save(s).`);
     } catch (err) {
       alert("Invalid JSON file.");
+      return;
     }
+
+    if (importedSaves.length > 0 && getSanityToken()) {
+      const didSync = await syncSavesToSanity(importedSaves);
+      alert(
+        didSync
+          ? `Imported ${importedSaves.length} save(s) and pushed them to Sanity.`
+          : `Imported ${importedSaves.length} save(s) locally.`,
+      );
+      return;
+    }
+
+    alert(`Imported ${importedSaves.length} save(s).`);
   };
 
   reader.readAsText(file);
@@ -370,6 +417,290 @@ function persistSaves() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.saves));
 }
 
+async function pullSavesFromSanity(options = {}) {
+  const { silent = false } = options;
+
+  if (!silent) {
+    setSanityStatus("Sanity: pulling saves...");
+  }
+
+  try {
+    const query = `*[_type == "scriptSave"] | order(coalesce(updatedAt, _updatedAt) desc) {
+      _id,
+      _createdAt,
+      _updatedAt,
+      localId,
+      title,
+      text,
+      hideOrder,
+      hiddenCount,
+      createdAt,
+      updatedAt
+    }`;
+    const response = await fetch(getSanityQueryUrl(query));
+
+    if (!response.ok) {
+      throw new Error(`Sanity query failed with ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const remoteSaves = (payload.result || []).map(sanityDocumentToSave).filter(Boolean);
+    const changed = mergeRemoteSaves(remoteSaves);
+
+    if (changed > 0) {
+      persistSaves();
+      renderSaveList();
+      if (getActiveSave()) {
+        renderPractice();
+      }
+    }
+
+    if (!silent || remoteSaves.length > 0) {
+      setSanityStatus(`Sanity: pulled ${remoteSaves.length} save(s)`);
+    }
+  } catch (err) {
+    if (!silent) {
+      setSanityStatus("Sanity: pull failed");
+      alert("Could not pull saves from Sanity. Check the local server origin and dataset access.");
+    }
+  }
+}
+
+async function syncSaveToSanity(save, options = {}) {
+  if (!save) return false;
+  return syncSavesToSanity([save], options);
+}
+
+async function syncSavesToSanity(saves, options = {}) {
+  const { silent = false } = options;
+  const token = getSanityToken();
+
+  if (!token) {
+    if (!silent) {
+      setSanityStatus("Sanity: token required for uploads");
+      alert("Paste a Sanity write token before uploading saves.");
+    }
+    return false;
+  }
+
+  if (!Array.isArray(saves) || saves.length === 0) {
+    if (!silent) {
+      setSanityStatus("Sanity: no saves to push");
+    }
+    return false;
+  }
+
+  if (!silent) {
+    setSanityStatus("Sanity: pushing saves...");
+  }
+
+  try {
+    const mutations = saves.map((save) => ({
+      createOrReplace: saveToSanityDocument(save),
+    }));
+
+    await mutateSanity(mutations, token);
+
+    if (!silent) {
+      setSanityStatus(`Sanity: pushed ${saves.length} save(s)`);
+    }
+
+    return true;
+  } catch (err) {
+    if (!silent) {
+      setSanityStatus("Sanity: push failed");
+      alert("Could not push saves to Sanity. Check that the token has write access.");
+    }
+    return false;
+  }
+}
+
+async function deleteSaveFromSanity(save, options = {}) {
+  const { silent = false } = options;
+  const token = getSanityToken();
+
+  if (!save || !token) return false;
+
+  try {
+    await mutateSanity(
+      [
+        {
+          delete: {
+            id: getSanityDocumentId(save),
+          },
+        },
+      ],
+      token,
+    );
+
+    if (!silent) {
+      setSanityStatus("Sanity: deleted save");
+    }
+
+    return true;
+  } catch (err) {
+    if (!silent) {
+      setSanityStatus("Sanity: delete failed");
+    }
+    return false;
+  }
+}
+
+async function mutateSanity(mutations, token) {
+  const response = await fetch(getSanityMutationUrl(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      mutations,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Sanity mutation failed with ${response.status}: ${body.slice(0, 240)}`);
+  }
+}
+
+function sanityDocumentToSave(doc) {
+  if (!doc || typeof doc !== "object") return null;
+
+  const save = normalizeSave({
+    id: doc.localId || String(doc._id || "").replace(/^scriptSave\./, ""),
+    title: doc.title,
+    text: doc.text,
+    hideOrder: Array.isArray(doc.hideOrder) ? doc.hideOrder : [],
+    hiddenCount: Number.isInteger(doc.hiddenCount) ? doc.hiddenCount : 0,
+    createdAt: doc.createdAt || doc._createdAt,
+    updatedAt: doc.updatedAt || doc._updatedAt,
+  });
+
+  if (save && typeof doc._id === "string" && !doc._id.startsWith("drafts.")) {
+    save.sanityDocumentId = doc._id;
+  }
+
+  return save;
+}
+
+function saveToSanityDocument(save) {
+  return {
+    _id: getSanityDocumentId(save),
+    _type: "scriptSave",
+    localId: save.id,
+    title: save.title,
+    text: save.text,
+    hideOrder: save.hideOrder,
+    hiddenCount: save.hiddenCount,
+    wordCount: save.wordCount,
+    createdAt: save.createdAt,
+    updatedAt: save.updatedAt,
+  };
+}
+
+function mergeRemoteSaves(remoteSaves) {
+  let changed = 0;
+  const byId = new Map(state.saves.map((save, index) => [save.id, { save, index }]));
+
+  for (const remote of remoteSaves) {
+    const existing = byId.get(remote.id);
+
+    if (!existing) {
+      state.saves.unshift(remote);
+      changed += 1;
+      continue;
+    }
+
+    const remoteTime = Date.parse(remote.updatedAt || "");
+    const localTime = Date.parse(existing.save.updatedAt || "");
+
+    if (Number.isFinite(remoteTime) && (!Number.isFinite(localTime) || remoteTime > localTime)) {
+      state.saves[existing.index] = remote;
+      changed += 1;
+    }
+  }
+
+  if (changed > 0) {
+    state.saves.sort((a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""));
+  }
+
+  return changed;
+}
+
+function getSanityQueryUrl(query) {
+  const { projectId, dataset, apiVersion } = SANITY_CONFIG;
+  const encodedQuery = encodeURIComponent(query);
+  return `https://${projectId}.api.sanity.io/v${apiVersion}/data/query/${dataset}?query=${encodedQuery}`;
+}
+
+function getSanityMutationUrl() {
+  const { projectId, dataset, apiVersion } = SANITY_CONFIG;
+  return `https://${projectId}.api.sanity.io/v${apiVersion}/data/mutate/${dataset}?returnDocuments=false`;
+}
+
+function getSanityDocumentId(save) {
+  if (
+    typeof save.sanityDocumentId === "string" &&
+    /^[A-Za-z0-9._-]+$/.test(save.sanityDocumentId) &&
+    !save.sanityDocumentId.startsWith("drafts.")
+  ) {
+    return save.sanityDocumentId;
+  }
+
+  const cleanId = String(save.id || createId()).replace(/[^A-Za-z0-9._-]/g, "-");
+  return `scriptSave.${cleanId}`;
+}
+
+function handleSaveSanityToken() {
+  const token = refs.sanityToken.value.trim();
+
+  if (!token) {
+    alert("Paste a Sanity write token first.");
+    return;
+  }
+
+  try {
+    sessionStorage.setItem(SANITY_TOKEN_KEY, token);
+    refs.sanityToken.value = "";
+    renderSanityTokenState();
+    setSanityStatus("Sanity: token ready");
+  } catch {
+    alert("Could not store the token in this browser session.");
+  }
+}
+
+function clearSanityToken() {
+  try {
+    sessionStorage.removeItem(SANITY_TOKEN_KEY);
+  } catch {
+    // Ignore browsers that block session storage.
+  }
+
+  refs.sanityToken.value = "";
+  renderSanityTokenState();
+  setSanityStatus("Sanity: local mode");
+}
+
+function getSanityToken() {
+  try {
+    return sessionStorage.getItem(SANITY_TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function renderSanityTokenState() {
+  const hasToken = Boolean(getSanityToken());
+  refs.pushSanityBtn.disabled = !hasToken;
+  refs.clearTokenBtn.disabled = !hasToken;
+  refs.sanityToken.placeholder = hasToken ? "Token active for this session" : "Paste token for uploads";
+}
+
+function setSanityStatus(message) {
+  refs.sanityStatus.textContent = message;
+}
+
 function getActiveSave() {
   return state.saves.find((item) => item.id === state.activeSaveId) || null;
 }
@@ -428,4 +759,3 @@ function safeDate(date) {
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}${m}${d}`;
 }
-
