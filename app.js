@@ -9,6 +9,7 @@ const SANITY_CONFIG = {
 const state = {
   saves: [],
   activeSaveId: null,
+  isSyncing: false,
 };
 
 const refs = {
@@ -35,6 +36,7 @@ const refs = {
   saveTokenBtn: document.getElementById("saveTokenBtn"),
   clearTokenBtn: document.getElementById("clearTokenBtn"),
   pullSanityBtn: document.getElementById("pullSanityBtn"),
+  saveAndSyncBtn: document.getElementById("saveAndSyncBtn"),
   pushSanityBtn: document.getElementById("pushSanityBtn"),
   sanityStatus: document.getElementById("sanityStatus"),
 };
@@ -62,6 +64,7 @@ function bindEvents() {
   refs.saveTokenBtn.addEventListener("click", handleSaveSanityToken);
   refs.clearTokenBtn.addEventListener("click", clearSanityToken);
   refs.pullSanityBtn.addEventListener("click", () => pullSavesFromSanity());
+  refs.saveAndSyncBtn.addEventListener("click", handleSaveAndSync);
   refs.pushSanityBtn.addEventListener("click", () => syncSavesToSanity(state.saves));
 }
 
@@ -419,35 +422,17 @@ function persistSaves() {
 
 async function pullSavesFromSanity(options = {}) {
   const { silent = false } = options;
+  const token = getSanityToken();
 
   if (!silent) {
     setSanityStatus("Sanity: pulling saves...");
   }
 
   try {
-    const query = `*[_type == "scriptSave"] | order(coalesce(updatedAt, _updatedAt) desc) {
-      _id,
-      _createdAt,
-      _updatedAt,
-      localId,
-      title,
-      text,
-      hideOrder,
-      hiddenCount,
-      createdAt,
-      updatedAt
-    }`;
-    const response = await fetch(getSanityQueryUrl(query));
+    const remoteSaves = await fetchSavesFromSanity({ token });
+    const result = mergeRemoteSaves(remoteSaves);
 
-    if (!response.ok) {
-      throw new Error(`Sanity query failed with ${response.status}`);
-    }
-
-    const payload = await response.json();
-    const remoteSaves = (payload.result || []).map(sanityDocumentToSave).filter(Boolean);
-    const changed = mergeRemoteSaves(remoteSaves);
-
-    if (changed > 0) {
+    if (result.changed > 0) {
       persistSaves();
       renderSaveList();
       if (getActiveSave()) {
@@ -456,7 +441,7 @@ async function pullSavesFromSanity(options = {}) {
     }
 
     if (!silent || remoteSaves.length > 0) {
-      setSanityStatus(`Sanity: pulled ${remoteSaves.length} save(s)`);
+      setSanityStatus(formatSyncStatus("pulled", remoteSaves.length, result));
     }
   } catch (err) {
     if (!silent) {
@@ -464,6 +449,66 @@ async function pullSavesFromSanity(options = {}) {
       alert("Could not pull saves from Sanity. Check the local server origin and dataset access.");
     }
   }
+}
+
+async function handleSaveAndSync() {
+  persistSaves();
+
+  const token = getSanityToken();
+  if (!token) {
+    setSanityStatus("Sanity: saved locally; token required to sync");
+    alert("Saved locally. Paste a Sanity write token to sync with the database.");
+    return;
+  }
+
+  setSyncBusy(true);
+  setSanityStatus("Sanity: saving and syncing...");
+
+  try {
+    const remoteSaves = await fetchSavesFromSanity({ token });
+    const result = mergeRemoteSaves(remoteSaves);
+
+    persistSaves();
+    renderSaveList();
+    if (getActiveSave()) {
+      renderPractice();
+    }
+
+    await syncSavesToSanity(state.saves, { silent: true });
+    setSanityStatus(formatSyncStatus("saved and synced", state.saves.length, result));
+  } catch (err) {
+    setSanityStatus("Sanity: sync failed");
+    alert("Could not save and sync. Check that the token has read and write access.");
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function fetchSavesFromSanity(options = {}) {
+  const { token = "" } = options;
+  const query = `*[_type == "scriptSave"] | order(coalesce(updatedAt, _updatedAt) desc) {
+    _id,
+    _originalId,
+    _createdAt,
+    _updatedAt,
+    localId,
+    title,
+    text,
+    hideOrder,
+    hiddenCount,
+    createdAt,
+    updatedAt
+  }`;
+  const response = await fetch(getSanityQueryUrl(query, { perspective: token ? "drafts" : "published" }), {
+    headers: getSanityRequestHeaders(token),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Sanity query failed with ${response.status}`);
+  }
+
+  const payload = await response.json();
+  return (payload.result || []).map(sanityDocumentToSave).filter(Boolean);
 }
 
 async function syncSaveToSanity(save, options = {}) {
@@ -566,9 +611,10 @@ async function mutateSanity(mutations, token) {
 
 function sanityDocumentToSave(doc) {
   if (!doc || typeof doc !== "object") return null;
+  const sourceId = String(doc._originalId || doc._id || "");
 
   const save = normalizeSave({
-    id: doc.localId || String(doc._id || "").replace(/^scriptSave\./, ""),
+    id: doc.localId || sourceId.replace(/^drafts\./, "").replace(/^scriptSave\./, ""),
     title: doc.title,
     text: doc.text,
     hideOrder: Array.isArray(doc.hideOrder) ? doc.hideOrder : [],
@@ -577,8 +623,8 @@ function sanityDocumentToSave(doc) {
     updatedAt: doc.updatedAt || doc._updatedAt,
   });
 
-  if (save && typeof doc._id === "string" && !doc._id.startsWith("drafts.")) {
-    save.sanityDocumentId = doc._id;
+  if (save && sourceId && !sourceId.startsWith("drafts.")) {
+    save.sanityDocumentId = sourceId;
   }
 
   return save;
@@ -600,15 +646,36 @@ function saveToSanityDocument(save) {
 }
 
 function mergeRemoteSaves(remoteSaves) {
-  let changed = 0;
+  const result = {
+    added: 0,
+    updated: 0,
+    duplicated: 0,
+    unchanged: 0,
+    changed: 0,
+  };
   const byId = new Map(state.saves.map((save, index) => [save.id, { save, index }]));
+  const rebuildIndex = () => {
+    byId.clear();
+    state.saves.forEach((save, index) => byId.set(save.id, { save, index }));
+  };
 
   for (const remote of remoteSaves) {
     const existing = byId.get(remote.id);
 
     if (!existing) {
       state.saves.unshift(remote);
-      changed += 1;
+      rebuildIndex();
+      result.added += 1;
+      continue;
+    }
+
+    if (savesMatchForSync(existing.save, remote)) {
+      if (!existing.save.sanityDocumentId && remote.sanityDocumentId) {
+        existing.save.sanityDocumentId = remote.sanityDocumentId;
+        result.updated += 1;
+      } else {
+        result.unchanged += 1;
+      }
       continue;
     }
 
@@ -617,21 +684,85 @@ function mergeRemoteSaves(remoteSaves) {
 
     if (Number.isFinite(remoteTime) && (!Number.isFinite(localTime) || remoteTime > localTime)) {
       state.saves[existing.index] = remote;
-      changed += 1;
+      byId.set(remote.id, { save: remote, index: existing.index });
+      result.updated += 1;
+      continue;
     }
+
+    if (Number.isFinite(remoteTime) && Number.isFinite(localTime) && localTime > remoteTime) {
+      if (!existing.save.sanityDocumentId && remote.sanityDocumentId) {
+        existing.save.sanityDocumentId = remote.sanityDocumentId;
+        result.updated += 1;
+      } else {
+        result.unchanged += 1;
+      }
+      continue;
+    }
+
+    const duplicate = duplicateSaveForConflict(remote);
+    state.saves.unshift(duplicate);
+    rebuildIndex();
+    result.duplicated += 1;
   }
 
-  if (changed > 0) {
+  result.changed = result.added + result.updated + result.duplicated;
+
+  if (result.changed > 0) {
     state.saves.sort((a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""));
+    rebuildIndex();
   }
 
-  return changed;
+  return result;
 }
 
-function getSanityQueryUrl(query) {
+function savesMatchForSync(a, b) {
+  return (
+    a.title === b.title &&
+    a.text === b.text &&
+    a.hiddenCount === b.hiddenCount &&
+    a.wordCount === b.wordCount &&
+    JSON.stringify(a.hideOrder || []) === JSON.stringify(b.hideOrder || [])
+  );
+}
+
+function duplicateSaveForConflict(save) {
+  const now = new Date().toISOString();
+  const duplicate = normalizeSave({
+    ...save,
+    id: createId(),
+    title: `${save.title || "Script"} (Synced Copy)`,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  if (duplicate) {
+    delete duplicate.sanityDocumentId;
+  }
+
+  return duplicate;
+}
+
+function formatSyncStatus(action, count, result) {
+  const details = [];
+
+  if (result.added) details.push(`${result.added} added`);
+  if (result.updated) details.push(`${result.updated} updated`);
+  if (result.duplicated) details.push(`${result.duplicated} duplicated`);
+
+  return details.length > 0
+    ? `Sanity: ${action} ${count} save(s), ${details.join(", ")}`
+    : `Sanity: ${action} ${count} save(s), no changes`;
+}
+
+function getSanityQueryUrl(query, options = {}) {
   const { projectId, dataset, apiVersion } = SANITY_CONFIG;
-  const encodedQuery = encodeURIComponent(query);
-  return `https://${projectId}.api.sanity.io/v${apiVersion}/data/query/${dataset}?query=${encodedQuery}`;
+  const params = new URLSearchParams({ query });
+
+  if (options.perspective) {
+    params.set("perspective", options.perspective);
+  }
+
+  return `https://${projectId}.api.sanity.io/v${apiVersion}/data/query/${dataset}?${params.toString()}`;
 }
 
 function getSanityMutationUrl() {
@@ -650,6 +781,10 @@ function getSanityDocumentId(save) {
 
   const cleanId = String(save.id || createId()).replace(/[^A-Za-z0-9._-]/g, "-");
   return `scriptSave.${cleanId}`;
+}
+
+function getSanityRequestHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function handleSaveSanityToken() {
@@ -692,13 +827,20 @@ function getSanityToken() {
 
 function renderSanityTokenState() {
   const hasToken = Boolean(getSanityToken());
-  refs.pushSanityBtn.disabled = !hasToken;
-  refs.clearTokenBtn.disabled = !hasToken;
+  refs.pullSanityBtn.disabled = state.isSyncing;
+  refs.saveAndSyncBtn.disabled = state.isSyncing;
+  refs.pushSanityBtn.disabled = !hasToken || state.isSyncing;
+  refs.clearTokenBtn.disabled = !hasToken || state.isSyncing;
   refs.sanityToken.placeholder = hasToken ? "Token active for this session" : "Paste token for uploads";
 }
 
 function setSanityStatus(message) {
   refs.sanityStatus.textContent = message;
+}
+
+function setSyncBusy(isSyncing) {
+  state.isSyncing = isSyncing;
+  renderSanityTokenState();
 }
 
 function getActiveSave() {
