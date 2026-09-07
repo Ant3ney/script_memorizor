@@ -1,5 +1,7 @@
 const STORAGE_KEY = "script_memorizor_saves_v1";
+const CLOUD_SLOT_STORAGE_KEY = "script_memorizor_cloud_slot_v1";
 const CLOUD_SAVE_DELAY = 600;
+const CLOUD_SYNC_INTERVAL = 30_000;
 
 const state = {
   saves: [],
@@ -11,6 +13,7 @@ const state = {
 let pendingCloudTimer = null;
 let pendingCloudSlotId = null;
 let cloudWriteQueue = Promise.resolve();
+let periodicCloudSyncTimer = null;
 
 const refs = {
   menuView: document.getElementById("menuView"),
@@ -43,9 +46,18 @@ init();
 
 function init() {
   state.saves = loadLocalSaves();
+  state.activeSlotId = loadRememberedCloudSlot();
+  if (state.activeSlotId) refs.slotId.value = state.activeSlotId;
+
   bindEvents();
   renderSaveList();
   renderCloudControls();
+  startPeriodicCloudSync();
+
+  if (state.activeSlotId) {
+    setMongoStatus(`Cloud ${state.activeSlotId}: remembered. Loading the latest scripts...`);
+    window.setTimeout(() => handleLoadFromMongo({ automatic: true }), 0);
+  }
 }
 
 function bindEvents() {
@@ -66,8 +78,13 @@ function bindEvents() {
     if (event.key === "Enter") handleLoadFromMongo();
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushPendingCloudSave();
+    if (document.visibilityState === "hidden") {
+      flushPendingCloudSave();
+    } else {
+      syncActiveCloudSlot();
+    }
   });
+  window.addEventListener("online", syncActiveCloudSlot);
 }
 
 function handleSlotInput() {
@@ -251,7 +268,7 @@ async function handleSaveNow() {
   await saveCurrentLibraryToMongo(state.activeSlotId);
 }
 
-async function handleLoadFromMongo() {
+async function handleLoadFromMongo(options = {}) {
   const slotId = getValidatedSlotId();
   if (!slotId) return;
 
@@ -273,14 +290,17 @@ async function handleLoadFromMongo() {
 
     state.saves = payload.saves.map(normalizeSave).filter(Boolean);
     state.activeSaveId = null;
-    state.activeSlotId = slotId;
+    rememberCloudSlot(slotId);
     persistSaves({ sync: false });
     renderSaveList();
     renderCloudControls();
     showView("menu");
-    setMongoStatus(`Cloud ${slotId}: loaded ${state.saves.length} script(s). Auto-save is on.`);
+    setMongoStatus(
+      `Cloud ${slotId}: loaded ${state.saves.length} script(s). Auto-save and 30-second sync are on.`,
+    );
   } catch (error) {
     setMongoStatus(`Cloud ${slotId}: ${error.message}`);
+    if (!options.automatic) refs.slotId.focus();
   } finally {
     endCloudRequest();
   }
@@ -317,7 +337,10 @@ function enqueueCloudWrite(slotId, saves, options = {}) {
       if (!response.ok) throw new Error(payload.error || "Could not save this script library.");
 
       if (state.activeSlotId === slotId) {
-        setMongoStatus(`Cloud ${slotId}: saved ${payload.saveCount} script(s). Auto-save is on.`);
+        rememberCloudSlot(slotId);
+        setMongoStatus(
+          `Cloud ${slotId}: saved ${payload.saveCount} script(s). Auto-save and 30-second sync are on.`,
+        );
       }
       return true;
     } catch (error) {
@@ -366,12 +389,43 @@ function clearPendingCloudTimer() {
   pendingCloudSlotId = null;
 }
 
+function startPeriodicCloudSync() {
+  if (periodicCloudSyncTimer) window.clearInterval(periodicCloudSyncTimer);
+  periodicCloudSyncTimer = window.setInterval(syncActiveCloudSlot, CLOUD_SYNC_INTERVAL);
+}
+
+function syncActiveCloudSlot() {
+  if (!state.activeSlotId || state.cloudRequests > 0 || document.visibilityState === "hidden") {
+    return;
+  }
+
+  if (pendingCloudTimer) {
+    flushPendingCloudSave();
+    return;
+  }
+
+  saveCurrentLibraryToMongo(state.activeSlotId, { silent: true });
+}
+
+function rememberCloudSlot(slotId) {
+  state.activeSlotId = slotId;
+  refs.slotId.value = slotId;
+  localStorage.setItem(CLOUD_SLOT_STORAGE_KEY, slotId);
+  renderCloudControls();
+}
+
+function loadRememberedCloudSlot() {
+  const slotId = localStorage.getItem(CLOUD_SLOT_STORAGE_KEY) || "";
+  return /^\d{4}$/.test(slotId) ? slotId : null;
+}
+
 async function disconnectCloudSlot() {
   await flushPendingCloudSave();
   state.activeSlotId = null;
   refs.slotId.value = "";
+  localStorage.removeItem(CLOUD_SLOT_STORAGE_KEY);
   renderCloudControls();
-  setMongoStatus("Cloud: disconnected. Local browser saves are still available.");
+  setMongoStatus("Cloud: disconnected and the remembered ID was removed. Local saves remain available.");
 }
 
 function getValidatedSlotId() {

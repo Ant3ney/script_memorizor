@@ -19,8 +19,10 @@ Do not open `index.html` directly: Atlas access goes through Netlify Functions s
 
 ## Four-digit saves
 
-- **Save to ID** writes the complete local script library to that ID and enables automatic cloud saves for the rest of the session.
+- **Save to ID** writes the complete local script library to that ID and enables automatic cloud saves.
 - **Load ID** replaces the browser's local library with the scripts currently stored under that ID.
+- After a successful save or load, the active ID is remembered in local storage, restored after a browser restart, and synced every 30 seconds in addition to immediate saves after changes.
+- **Disconnect** flushes pending changes and removes the remembered ID from that browser.
 - Leading zeroes are supported, so `0042` is a valid ID.
 
 A four-digit ID has only 10,000 possible values. Treat this as convenient shared storage, not private or authenticated storage; anyone who knows or guesses an ID can read and replace its scripts.
