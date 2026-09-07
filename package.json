@@ -1,0 +1,20 @@
+{
+  "name": "script-memorizor",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A script memorization app with four-digit MongoDB Atlas save slots.",
+  "scripts": {
+    "dev": "netlify dev",
+    "start": "netlify dev",
+    "build": "npm run check",
+    "check": "node --check database.js && node --check netlify/functions/scripts.mjs && node --check netlify/functions/health.mjs && node --check public/app.js",
+    "test": "npm run check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "mongodb": "^6.19.0"
+  }
+}

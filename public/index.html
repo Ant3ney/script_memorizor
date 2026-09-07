@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Create, practice, and sync scripts with a four-digit save ID." />
   <title>Script Memorizor</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -27,7 +28,7 @@
           <textarea id="newScript" rows="8" placeholder="Type your full script here..."></textarea>
 
           <button id="createBtn" class="btn btn-primary">Save and Start</button>
-          <p class="hint">A save file is created immediately and stored in your browser.</p>
+          <p class="hint">Scripts save in this browser immediately and sync after you choose a cloud ID.</p>
         </div>
 
         <div class="panel saves-panel">
@@ -46,22 +47,31 @@
 
         <div class="panel database-panel">
           <div class="panel-row">
-            <h2>Sanity Database</h2>
-            <button id="pullSanityBtn" class="btn btn-ghost">Pull Saves</button>
+            <div>
+              <h2>MongoDB Atlas Saves</h2>
+              <p class="panel-copy">Use one four-digit ID to access your script library on any device.</p>
+            </div>
           </div>
 
-          <label for="sanityToken">Write token</label>
-          <div class="token-row">
-            <input id="sanityToken" type="password" autocomplete="off" placeholder="Paste token for uploads" />
-            <button id="saveTokenBtn" class="btn btn-primary">Use Token</button>
-            <button id="clearTokenBtn" class="btn btn-ghost">Clear</button>
+          <label for="slotId">Four-digit save ID</label>
+          <div class="slot-row">
+            <input
+              id="slotId"
+              type="text"
+              inputmode="numeric"
+              autocomplete="off"
+              maxlength="4"
+              pattern="[0-9]{4}"
+              placeholder="0000"
+              aria-describedby="mongoStatus slotWarning"
+            />
+            <button id="loadMongoBtn" class="btn btn-ghost">Load ID</button>
+            <button id="saveMongoBtn" class="btn btn-primary">Save to ID</button>
+            <button id="clearSlotBtn" class="btn btn-ghost" disabled>Disconnect</button>
           </div>
 
-          <div class="panel-row database-actions">
-            <button id="saveAndSyncBtn" class="btn btn-primary">Save and Sync</button>
-            <button id="pushSanityBtn" class="btn btn-ghost">Push All Saves</button>
-            <p id="sanityStatus" class="status" aria-live="polite">Sanity: local mode</p>
-          </div>
+          <p id="mongoStatus" class="status" aria-live="polite">Cloud: enter a four-digit ID to load or save.</p>
+          <p id="slotWarning" class="hint">Anyone with the ID can access its scripts, so do not use it for private material.</p>
         </div>
       </section>
 
