@@ -8,6 +8,7 @@ const state = {
   activeSaveId: null,
   activeSlotId: null,
   cloudRequests: 0,
+  cloudLogEntries: [],
 };
 
 let pendingCloudTimer = null;
@@ -39,7 +40,12 @@ const refs = {
   loadMongoBtn: document.getElementById("loadMongoBtn"),
   saveMongoBtn: document.getElementById("saveMongoBtn"),
   clearSlotBtn: document.getElementById("clearSlotBtn"),
-  mongoStatus: document.getElementById("mongoStatus"),
+  openLogsBtn: document.getElementById("openLogsBtn"),
+  closeLogsBtn: document.getElementById("closeLogsBtn"),
+  logsDialog: document.getElementById("logsDialog"),
+  logsScroll: document.getElementById("logsScroll"),
+  cloudLogList: document.getElementById("cloudLogList"),
+  cloudLogEmpty: document.getElementById("cloudLogEmpty"),
 };
 
 init();
@@ -53,9 +59,10 @@ function init() {
   renderSaveList();
   renderCloudControls();
   startPeriodicCloudSync();
+  setMongoStatus("Cloud sync is ready. Enter a four-digit ID to load or save.");
 
   if (state.activeSlotId) {
-    setMongoStatus(`Cloud ${state.activeSlotId}: remembered. Loading the latest scripts...`);
+    setMongoStatus(`Cloud ${state.activeSlotId}: remembered. Loading the latest scripts.`);
     window.setTimeout(() => handleLoadFromMongo({ automatic: true }), 0);
   }
 }
@@ -73,6 +80,11 @@ function bindEvents() {
   refs.loadMongoBtn.addEventListener("click", handleLoadFromMongo);
   refs.saveMongoBtn.addEventListener("click", handleSaveToMongo);
   refs.clearSlotBtn.addEventListener("click", disconnectCloudSlot);
+  refs.openLogsBtn.addEventListener("click", openLogs);
+  refs.closeLogsBtn.addEventListener("click", closeLogs);
+  refs.logsDialog.addEventListener("click", (event) => {
+    if (event.target === refs.logsDialog) closeLogs();
+  });
   refs.slotId.addEventListener("input", handleSlotInput);
   refs.slotId.addEventListener("keydown", (event) => {
     if (event.key === "Enter") handleLoadFromMongo();
@@ -274,7 +286,7 @@ async function handleLoadFromMongo(options = {}) {
 
   await flushPendingCloudSave();
   beginCloudRequest();
-  setMongoStatus(`Cloud ${slotId}: loading...`);
+  setMongoStatus(`Cloud ${slotId}: loading the latest scripts.`);
 
   try {
     await cloudWriteQueue.catch(() => {});
@@ -325,7 +337,9 @@ async function saveCurrentLibraryToMongo(slotId, options = {}) {
 function enqueueCloudWrite(slotId, saves, options = {}) {
   const write = async () => {
     beginCloudRequest();
-    if (state.activeSlotId === slotId) setMongoStatus(`Cloud ${slotId}: saving...`);
+    if (state.activeSlotId === slotId) {
+      setMongoStatus(`Cloud ${slotId}: saving the current script library.`);
+    }
 
     try {
       const response = await fetch(`/api/scripts/${slotId}`, {
@@ -364,7 +378,7 @@ function scheduleCloudSave() {
 
   clearPendingCloudTimer();
   pendingCloudSlotId = state.activeSlotId;
-  setMongoStatus(`Cloud ${pendingCloudSlotId}: changes waiting to sync...`);
+  setMongoStatus(`Cloud ${pendingCloudSlotId}: changes are queued for auto-save.`);
   pendingCloudTimer = window.setTimeout(() => {
     const slotId = pendingCloudSlotId;
     pendingCloudTimer = null;
@@ -458,7 +472,63 @@ function renderCloudControls() {
 }
 
 function setMongoStatus(message) {
-  refs.mongoStatus.textContent = message;
+  const entry = {
+    message,
+    timestamp: new Date(),
+  };
+
+  state.cloudLogEntries.push(entry);
+  appendCloudLogEntry(entry);
+}
+
+function openLogs() {
+  if (typeof refs.logsDialog.showModal === "function") {
+    refs.logsDialog.showModal();
+  } else {
+    refs.logsDialog.setAttribute("open", "");
+  }
+
+  refs.logsScroll.scrollTop = refs.logsScroll.scrollHeight;
+}
+
+function closeLogs() {
+  if (typeof refs.logsDialog.close === "function") {
+    refs.logsDialog.close();
+  } else {
+    refs.logsDialog.removeAttribute("open");
+  }
+}
+
+function appendCloudLogEntry(entry) {
+  const wasNearBottom =
+    refs.logsScroll.scrollHeight - refs.logsScroll.scrollTop - refs.logsScroll.clientHeight < 48;
+  const item = document.createElement("li");
+  const time = document.createElement("time");
+  const message = document.createElement("p");
+
+  item.className = "cloud-log-entry";
+  time.className = "cloud-log-time";
+  time.dateTime = entry.timestamp.toISOString();
+  time.textContent = formatLogTime(entry.timestamp);
+  message.textContent = entry.message;
+
+  item.append(time, message);
+  refs.cloudLogList.appendChild(item);
+  refs.cloudLogEmpty.hidden = true;
+
+  if (refs.logsDialog.open && wasNearBottom) {
+    refs.logsScroll.scrollTop = refs.logsScroll.scrollHeight;
+  }
+}
+
+function formatLogTime(date) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
 }
 
 async function readJsonResponse(response) {

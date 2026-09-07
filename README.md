@@ -22,6 +22,7 @@ Do not open `index.html` directly: Atlas access goes through Netlify Functions s
 - **Save to ID** writes the complete local script library to that ID and enables automatic cloud saves.
 - **Load ID** replaces the browser's local library with the scripts currently stored under that ID.
 - After a successful save or load, the active ID is remembered in local storage, restored after a browser restart, and synced every 30 seconds in addition to immediate saves after changes.
+- **LOGS** opens a timestamped history of cloud save activity in a fixed overlay, keeping status updates from moving the page content.
 - **Disconnect** flushes pending changes and removes the remembered ID from that browser.
 - Leading zeroes are supported, so `0042` is a valid ID.
 
